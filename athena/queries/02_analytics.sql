@@ -34,7 +34,7 @@ SELECT
   user,
   COUNT(*) AS failed_attempts
 FROM security_log_lake.vpn_logs
-WHERE status = 'fail'
+WHERE status = 'FAIL'
 GROUP BY user
 ORDER BY failed_attempts DESC
 LIMIT 10;
@@ -46,10 +46,9 @@ SELECT
   SUM(session_duration_sec) AS total_session_sec,
   SUM(bytes_transferred) AS total_bytes
 FROM security_log_lake.vpn_logs
-WHERE status = 'success'
+WHERE status = 'SUCCESS'
 GROUP BY user, vpn_gateway
-ORDER BY total_session_sec DESC
-LIMIT 10;
+ORDER BY total_session_sec DESC;
 
 -- Q6: Tráfico rechazado en VPC por puerto
 SELECT 
@@ -84,8 +83,10 @@ LIMIT 10;
 SELECT
   SUBSTR(timestamp, 1, 10) AS day,
   COUNT(*) AS total_events,
-  SUM(CASE WHEN action = 'DENY' THEN 1 ELSE 0 END) AS blocked,
   SUM(CASE WHEN action = 'ALLOW' THEN 1 ELSE 0 END) AS allowed,
+  SUM(CASE WHEN action = 'DENY' THEN 1 ELSE 0 END) AS blocked,
+  SUM(CASE WHEN action = 'DROP' THEN 1 ELSE 0 END) AS dropped,
+  SUM(CASE WHEN action = 'RESET' THEN 1 ELSE 0 END) AS reset_count,
   SUM(bytes_sent + bytes_received) AS total_bytes
 FROM security_log_lake.firewall_logs
 GROUP BY SUBSTR(timestamp, 1, 10)
