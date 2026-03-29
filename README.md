@@ -1,3 +1,5 @@
+English | [Español](README.es.md)
+
 # 🔐 Security Log Lake & Traffic Insights on AWS
 
 > **Serverless analytics platform for security and network telemetry** — ingests raw firewall, VPN, and VPC Flow logs, normalizes them through an automated pipeline, and generates actionable insights via SQL analytics and interactive Power BI dashboards.
