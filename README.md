@@ -222,7 +222,7 @@ Execute `athena/queries/01_create_tables.sql` then `02_analytics.sql` in the Ath
 ### 7. Open Power BI
 Connect Power BI Desktop to the CSV files in `powerbi/data/`.
 
-> Full step-by-step deployment guide coming in `docs/setup.md`
+> Full deployment guide available in `docs/setup.md`
 
 <br>
 
