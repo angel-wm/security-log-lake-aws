@@ -173,7 +173,7 @@ Location: `s3://YOUR-BUCKET/processed/vpc-flow/`
 | `log_status` | STRING | Always `OK` in synthetic data |
 | `_source` | STRING | Always `vpc-flow` |
 | `_processed_at` | STRING | |
-| `_has_issues` | STRING | |
+| `_has_issues` | BOOLEAN | Athena DDL type; CSV values are serialized as `True` / `False` |
 
 ---
 
