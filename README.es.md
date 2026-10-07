@@ -32,7 +32,10 @@ Antes de reutilizar la configuración AWS, reemplaza los valores específicos de
 
 La guía de despliegue usa actualmente la política administrada `AmazonS3FullAccess` para facilitar la reproducción. Debe entenderse como una configuración de laboratorio/portafolio, no como una línea base de mínimo privilegio para producción.
 
-El generador sintético no fija una semilla aleatoria. Si regeneras los 30 días de datos, los conteos y hallazgos serán distintos a los del run publicado en el repositorio.
+El repositorio admite dos caminos de reproducibilidad claramente distintos:
+
+- **Reproducir el run publicado:** usa los 90 CSV versionados que ya están en `ingestion/sample-logs/`. Este camino conserva el dataset fuente detrás de la evidencia publicada y es el adecuado para comparar tus resultados de Athena con los hallazgos documentados más abajo.
+- **Generar un run sintético nuevo:** elimina localmente los CSV comprometidos y luego ejecuta `python ingestion/generate_logs.py`. El generador usa la fecha de ejecución y no fija una semilla aleatoria, por lo que los nuevos archivos, conteos y hallazgos serán distintos al run publicado.
 
 Para el flujo completo de despliegue y las sustituciones necesarias, consulta la [Guía de Setup](docs/setup.md).
 
@@ -45,15 +48,19 @@ Para el flujo completo de despliegue y las sustituciones necesarias, consulta la
    cd security-log-lake-aws
    ```
 
-2. Genera el dataset sintético local.
+2. Elige el dataset fuente para este run.
 
-   ```bash
-   python ingestion/generate_logs.py
-   ```
+   - Para reproducir el run publicado, conserva los 90 CSV comprometidos en `ingestion/sample-logs/` y no ejecutes el generador.
+   - Para crear un run estocástico nuevo, primero elimina los CSV comprometidos de tu working tree local y luego genera un dataset nuevo de 30 días:
 
-   El generador crea 90 archivos CSV: 30 días × 3 fuentes × 5,000 registros por fuente/día, para un total de 450,000 registros.
+     ```powershell
+     Remove-Item ingestion/sample-logs/*.csv
+     python ingestion/generate_logs.py
+     ```
 
-3. Sigue la [Guía de Setup](docs/setup.md) para crear los prefijos S3, desplegar el parser Lambda, configurar el trigger S3 y sustituir tus identificadores AWS.
+     El nuevo run crea 90 CSV: 30 días × 3 fuentes × 5,000 registros por fuente/día, para un total de 450,000 registros. Como las fechas y los valores aleatorios se generan en tiempo de ejecución, sus hallazgos no coincidirán exactamente con las métricas publicadas.
+
+3. Sigue la [Guía de Setup](docs/setup.md) para crear los prefijos S3, cargar el dataset fuente elegido, desplegar el parser Lambda, configurar el trigger S3 y sustituir tus identificadores AWS.
 
 4. Ejecuta `athena/queries/01_create_tables.sql` y después Q1–Q9 desde `athena/queries/02_analytics.sql`.
 
