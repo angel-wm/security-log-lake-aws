@@ -1,6 +1,6 @@
 # Setup Guide — Security Log Lake on AWS
 
-This guide reproduces the repository's AWS pipeline from synthetic log generation through Athena results for Power BI.
+This guide reproduces the repository's AWS pipeline from source security logs through Athena results for Power BI. You can either replay the version-controlled source dataset behind the published portfolio run or generate a new stochastic dataset.
 
 Commands are written for **PowerShell on Windows**. Run repository-relative commands from the repository root unless a step explicitly changes directories.
 
@@ -44,7 +44,7 @@ $BUCKET = "YOUR-BUCKET-NAME"
 
 1. [Clone and configure AWS](#1-clone-and-configure-aws)
 2. [Create the S3 structure](#2-create-the-s3-structure)
-3. [Generate and upload logs](#3-generate-and-upload-logs)
+3. [Choose and upload source logs](#3-choose-and-upload-source-logs)
 4. [Deploy the Lambda parser](#4-deploy-the-lambda-parser)
 5. [Configure the S3 trigger](#5-configure-the-s3-trigger)
 6. [Create Athena tables and run analytics](#6-create-athena-tables-and-run-analytics)
@@ -111,21 +111,53 @@ aws s3 ls s3://$BUCKET --recursive
 aws athena get-work-group --work-group primary
 ```
 
-## 3. Generate and upload logs
+## 3. Choose and upload source logs
 
-Run the generator from the repository root:
+The repository includes 90 version-controlled CSVs under `ingestion/sample-logs/`. Choose one of the following paths before uploading anything to S3.
 
-```powershell
-python ingestion/generate_logs.py
-```
+### Path A — replay the published run
 
-Expected result:
+Use this path when you want the source dataset to match the committed portfolio evidence and published findings.
+
+Do not run the generator. Keep the 90 committed CSVs exactly as cloned and continue to the upload commands below.
+
+Expected local source dataset:
 
 - 90 CSV files in `ingestion/sample-logs/`;
 - 30 days;
 - 3 sources per day;
 - 5,000 records per source/day;
+- 450,000 total records.
+
+### Path B — generate a fresh synthetic run
+
+Use this path when you want to exercise the generator and produce a new scenario.
+
+The generator writes into the same `ingestion/sample-logs/` directory, uses the current execution date, and does not set a fixed random seed. Because the repository already contains the 90 published-run CSVs, clear those local CSVs first; otherwise the directory can contain files from multiple runs.
+
+From the repository root:
+
+```powershell
+Remove-Item ingestion/sample-logs/*.csv
+python ingestion/generate_logs.py
+```
+
+Expected result:
+
+- 90 newly generated CSV files in `ingestion/sample-logs/`;
+- 30 days;
+- 3 sources per day;
+- 5,000 records per source/day;
 - 450,000 total generated records.
+
+The new dataset will not reproduce the published metrics exactly. If you want to restore the committed source dataset later, first remove the generated CSVs and then restore the tracked files:
+
+```powershell
+Remove-Item ingestion/sample-logs/*.csv
+git restore ingestion/sample-logs
+```
+
+### Upload the selected dataset
 
 Upload each source to the matching raw prefix:
 
@@ -350,7 +382,7 @@ To regenerate data cleanly:
    aws s3api put-object --bucket $BUCKET --key "processed/vpc-flow/"
    ```
 
-5. Upload each source again using the commands from [Generate and upload logs](#3-generate-and-upload-logs).
+5. Upload each source again using the commands from [Choose and upload source logs](#3-choose-and-upload-source-logs).
 
 6. Verify that processed objects are recreated and rerun the Athena queries.
 
