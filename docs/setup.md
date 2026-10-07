@@ -1,87 +1,69 @@
-# 🛠️ Setup Guide — Security Log Lake on AWS
+# Setup Guide — Security Log Lake on AWS
 
-Step-by-step deployment guide for replicating this project from scratch. All commands are written for **PowerShell on Windows**. The AWS CLI must be installed and configured before starting Part 3.
+This guide reproduces the repository's AWS pipeline from synthetic log generation through Athena results for Power BI.
 
----
+Commands are written for **PowerShell on Windows**. Run repository-relative commands from the repository root unless a step explicitly changes directories.
 
-## Table of Contents
+## Before you start
 
-1. [Prerequisites](#1-prerequisites)
-2. [GitHub — Repo & Branch Structure](#2-github--repo--branch-structure)
-3. [AWS CLI — Configuration](#3-aws-cli--configuration)
-4. [S3 — Bucket Structure](#4-s3--bucket-structure)
-5. [Log Generation & Upload](#5-log-generation--upload)
-6. [Lambda — Parser Deployment](#6-lambda--parser-deployment)
-7. [Athena — Tables & Analytics](#7-athena--tables--analytics)
-8. [Power BI — Download Results](#8-power-bi--download-results)
-9. [Git Workflow](#9-git-workflow)
-10. [Troubleshooting](#10-troubleshooting)
+### Prerequisites
 
----
+| Tool or access | Requirement |
+| --- | --- |
+| Python | 3.10+ on PATH |
+| AWS CLI | v2, configured locally |
+| Git | Any current version |
+| Power BI Desktop | Windows |
+| AWS account | Access to S3, Lambda, Athena, IAM, and CloudWatch |
 
-## 1. Prerequisites
+Verify the AWS CLI and active identity:
 
-| Tool | Version | Notes |
-|---|---|---|
-| Python | 3.10+ | Must be on PATH |
-| AWS CLI | v2 | [Install guide](https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2.html) |
-| Git | Any | |
-| Power BI Desktop | Latest | Windows only |
-| AWS Account | — | IAM user with programmatic access |
-
-Verify AWS CLI is installed:
 ```powershell
 aws --version
+aws sts get-caller-identity
 ```
 
----
+### Values you must replace
 
-## 2. GitHub — Repo & Branch Structure
+Two checked-in files contain identifiers from the original project environment:
 
-### Person 1 (Angel) — Initial setup
+1. `lambda/parser/s3-notification.json` contains the original Lambda function ARN.
+2. `athena/queries/01_create_tables.sql` contains the original S3 bucket in each `LOCATION` clause.
+
+Replace those values with identifiers from your AWS account before applying the trigger or creating the Athena tables.
+
+Throughout this guide, set your bucket once:
+
 ```powershell
-# Clone the repo
+$BUCKET = "YOUR-BUCKET-NAME"
+```
+
+> The IAM commands below use `AmazonS3FullAccess` because that is the repository's documented reproduction path. For a production deployment, replace it with a policy scoped to the required bucket and operations.
+
+## Deployment path
+
+1. [Clone and configure AWS](#1-clone-and-configure-aws)
+2. [Create the S3 structure](#2-create-the-s3-structure)
+3. [Generate and upload logs](#3-generate-and-upload-logs)
+4. [Deploy the Lambda parser](#4-deploy-the-lambda-parser)
+5. [Configure the S3 trigger](#5-configure-the-s3-trigger)
+6. [Create Athena tables and run analytics](#6-create-athena-tables-and-run-analytics)
+7. [Prepare Power BI result files](#7-prepare-power-bi-result-files)
+8. [Re-run the pipeline](#8-re-run-the-pipeline)
+9. [Collaboration workflow](#9-collaboration-workflow)
+10. [Troubleshooting](#10-troubleshooting)
+11. [Quick reference](#11-quick-reference)
+
+## 1. Clone and configure AWS
+
+Clone the repository:
+
+```powershell
 git clone https://github.com/angel-wm/security-log-lake-aws.git
 cd security-log-lake-aws
-
-# Create folder structure
-mkdir -p ingestion/sample-logs
-mkdir -p lambda/parser
-mkdir -p athena/queries
-mkdir -p docs
-mkdir -p powerbi/data
-
-# Create .gitkeep placeholders so empty folders are tracked
-New-Item ingestion/sample-logs/.gitkeep -Force
-New-Item lambda/parser/.gitkeep -Force
-New-Item athena/queries/.gitkeep -Force
-New-Item docs/.gitkeep -Force
-New-Item powerbi/.gitkeep -Force
-
-# First commit
-git add .
-git commit -m "feat: initial project structure and README"
-git push origin main
 ```
 
-### Both contributors — Create working branches
-```powershell
-# Person 1 (Angel)
-git checkout -b dev-angel
-git push origin dev-angel
-
-# Person 2 (Flavio) — after cloning
-git clone https://github.com/angel-wm/security-log-lake-aws.git
-cd security-log-lake-aws
-git checkout -b dev-flavio
-git push origin dev-flavio
-```
-
----
-
-## 3. AWS CLI — Configuration
-
-Each contributor configures their own machine with their IAM user credentials.
+Configure the AWS CLI if needed:
 
 ```powershell
 aws configure
@@ -89,23 +71,20 @@ aws configure
 # AWS Secret Access Key: [your secret]
 # Default region name:   us-east-1
 # Default output format: json
+```
 
-# Verify identity
+Verify:
+
+```powershell
 aws sts get-caller-identity
 ```
 
----
+## 2. Create the S3 structure
 
-## 4. S3 — Bucket Structure
+S3 prefixes are used as the project folder structure.
 
-> **Note:** S3 has no real directories — folders are simulated via key prefixes. After any recursive deletion, folder placeholders must be explicitly recreated with `put-object`.
+Create the required prefixes:
 
-Set the bucket variable once and reuse it across the session:
-```powershell
-$BUCKET = "YOUR-BUCKET-NAME"
-```
-
-Create all folder prefixes:
 ```powershell
 aws s3api put-object --bucket $BUCKET --key "raw/firewall/"
 aws s3api put-object --bucket $BUCKET --key "raw/vpn/"
@@ -115,38 +94,40 @@ aws s3api put-object --bucket $BUCKET --key "processed/vpn/"
 aws s3api put-object --bucket $BUCKET --key "processed/vpc-flow/"
 aws s3api put-object --bucket $BUCKET --key "curated/"
 aws s3api put-object --bucket $BUCKET --key "athena-results/"
-
-# Verify
-aws s3 ls s3://$BUCKET --recursive
 ```
 
-Configure Athena workgroup output location:
+Configure the Athena workgroup output:
+
 ```powershell
 aws athena update-work-group `
   --work-group primary `
   --configuration-updates "ResultConfigurationUpdates={OutputLocation=s3://$BUCKET/athena-results/}"
+```
 
-# Verify
+Verify both:
+
+```powershell
+aws s3 ls s3://$BUCKET --recursive
 aws athena get-work-group --work-group primary
 ```
 
----
+## 3. Generate and upload logs
 
-## 5. Log Generation & Upload
+Run the generator from the repository root:
 
-### Generate synthetic logs
-
-Always run from the **repo root** — not from inside `ingestion/`:
 ```powershell
-# From repo root:
 python ingestion/generate_logs.py
 ```
 
-This produces 90 CSV files in `ingestion/sample-logs/` (30 days × 3 log types).
+Expected result:
 
-### Upload to S3
+- 90 CSV files in `ingestion/sample-logs/`;
+- 30 days;
+- 3 sources per day;
+- 5,000 records per source/day;
+- 450,000 total generated records.
 
-Route each log type to its correct S3 prefix. Lambda triggers automatically on upload.
+Upload each source to the matching raw prefix:
 
 ```powershell
 aws s3 cp ingestion/sample-logs/ s3://$BUCKET/raw/firewall/ `
@@ -157,63 +138,19 @@ aws s3 cp ingestion/sample-logs/ s3://$BUCKET/raw/vpn/ `
 
 aws s3 cp ingestion/sample-logs/ s3://$BUCKET/raw/vpc-flow/ `
   --recursive --exclude "*" --include "vpc-flow_*.csv"
-
-# Verify Lambda processed the files
-aws s3 ls s3://$BUCKET/processed/firewall/
-aws s3 ls s3://$BUCKET/processed/vpn/
-aws s3 ls s3://$BUCKET/processed/vpc-flow/
 ```
 
-### Re-running the pipeline (if regenerating data)
+If the Lambda trigger is already configured, processed files should begin appearing under `processed/`. During an initial deployment, continue with the Lambda steps first.
 
-> ⚠️ **Important:** Delete subfolder by subfolder — never use `aws s3 rm s3://$BUCKET/raw/ --recursive`. That deletes the folder placeholders too, breaking the structure.
+## 4. Deploy the Lambda parser
 
-```powershell
-# 1. Delete local CSVs
-Remove-Item ingestion/sample-logs/*.csv
+### Create the execution role
 
-# 2. Regenerate
-python ingestion/generate_logs.py
-
-# 3. Clear S3 contents — subfolder by subfolder
-aws s3 rm s3://$BUCKET/raw/firewall/ --recursive
-aws s3 rm s3://$BUCKET/raw/vpn/ --recursive
-aws s3 rm s3://$BUCKET/raw/vpc-flow/ --recursive
-aws s3 rm s3://$BUCKET/processed/firewall/ --recursive
-aws s3 rm s3://$BUCKET/processed/vpn/ --recursive
-aws s3 rm s3://$BUCKET/processed/vpc-flow/ --recursive
-
-# 4. Recreate folder placeholders
-aws s3api put-object --bucket $BUCKET --key "raw/firewall/"
-aws s3api put-object --bucket $BUCKET --key "raw/vpn/"
-aws s3api put-object --bucket $BUCKET --key "raw/vpc-flow/"
-aws s3api put-object --bucket $BUCKET --key "processed/firewall/"
-aws s3api put-object --bucket $BUCKET --key "processed/vpn/"
-aws s3api put-object --bucket $BUCKET --key "processed/vpc-flow/"
-
-# 5. Re-upload
-aws s3 cp ingestion/sample-logs/ s3://$BUCKET/raw/firewall/ `
-  --recursive --exclude "*" --include "firewall_*.csv"
-aws s3 cp ingestion/sample-logs/ s3://$BUCKET/raw/vpn/ `
-  --recursive --exclude "*" --include "vpn_*.csv"
-aws s3 cp ingestion/sample-logs/ s3://$BUCKET/raw/vpc-flow/ `
-  --recursive --exclude "*" --include "vpc-flow_*.csv"
-
-# 6. Verify
-aws s3 ls s3://$BUCKET/processed/firewall/
-```
-
----
-
-## 6. Lambda — Parser Deployment
-
-### Create IAM role
 ```powershell
 aws iam create-role `
   --role-name security-log-lake-lambda-role `
   --assume-role-policy-document file://lambda/parser/trust-policy.json
 
-# Attach required policies
 aws iam attach-role-policy `
   --role-name security-log-lake-lambda-role `
   --policy-arn arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
@@ -221,12 +158,16 @@ aws iam attach-role-policy `
 aws iam attach-role-policy `
   --role-name security-log-lake-lambda-role `
   --policy-arn arn:aws:iam::aws:policy/AmazonS3FullAccess
+```
 
-# Verify
+Verify:
+
+```powershell
 aws iam get-role --role-name security-log-lake-lambda-role
 ```
 
-### Package and deploy the function
+### Package and create the function
+
 ```powershell
 cd lambda/parser
 Compress-Archive -Path handler.py -DestinationPath function.zip -Force
@@ -244,28 +185,16 @@ aws lambda create-function `
   --description "Parses and normalizes raw firewall/VPN/VPC Flow logs"
 
 cd ../..
+```
 
-# Verify
+Verify:
+
+```powershell
 aws lambda get-function --function-name security-log-lake-parser
 ```
 
-### Configure S3 event trigger
-```powershell
-# Grant S3 permission to invoke Lambda
-aws lambda add-permission `
-  --function-name security-log-lake-parser `
-  --statement-id s3-trigger `
-  --action lambda:InvokeFunction `
-  --principal s3.amazonaws.com `
-  --source-arn arn:aws:s3:::$BUCKET
+To update the function after changing `handler.py`:
 
-# Apply the notification configuration
-aws s3api put-bucket-notification-configuration `
-  --bucket $BUCKET `
-  --notification-configuration file://lambda/parser/s3-notification.json
-```
-
-### Update function code (after changes to handler.py)
 ```powershell
 cd lambda/parser
 Compress-Archive -Path handler.py -DestinationPath function.zip -Force
@@ -277,63 +206,87 @@ aws lambda update-function-code `
 cd ../..
 ```
 
-### Monitor execution
+## 5. Configure the S3 trigger
+
+First, replace the `LambdaFunctionArn` in `lambda/parser/s3-notification.json` with the ARN of the function created in your AWS account.
+
+Grant S3 permission to invoke Lambda:
+
 ```powershell
-# Tail CloudWatch logs in real time
+aws lambda add-permission `
+  --function-name security-log-lake-parser `
+  --statement-id s3-trigger `
+  --action lambda:InvokeFunction `
+  --principal s3.amazonaws.com `
+  --source-arn arn:aws:s3:::$BUCKET
+```
+
+Apply the repository notification configuration:
+
+```powershell
+aws s3api put-bucket-notification-configuration `
+  --bucket $BUCKET `
+  --notification-configuration file://lambda/parser/s3-notification.json
+```
+
+Verify the notification and monitor execution:
+
+```powershell
+aws s3api get-bucket-notification-configuration --bucket $BUCKET
 aws logs tail /aws/lambda/security-log-lake-parser --follow
 ```
 
----
+Upload or re-upload a test CSV under the matching `raw/<source>/` prefix and verify that a corresponding object appears under `processed/<source>/`.
 
-## 7. Athena — Tables & Analytics
+## 6. Create Athena tables and run analytics
 
-Athena queries are executed in the **AWS Console** (Athena Query Editor), not via CLI.
+### Update table locations
 
-### Step 1 — Create the database and external tables
+Before running the DDL, edit all three `LOCATION` clauses in:
 
-Run the full contents of `athena/queries/01_create_tables.sql` in the Athena console. This creates:
-- Database: `security_log_lake`
-- Tables: `firewall_logs`, `vpn_logs`, `vpc_flow_logs`
+`athena/queries/01_create_tables.sql`
 
-All tables are external and point to the `processed/` prefix in S3. No data is moved.
+Replace the original project bucket with your bucket:
 
-### Step 2 — Run analytical queries
+```text
+s3://YOUR-BUCKET-NAME/processed/firewall/
+s3://YOUR-BUCKET-NAME/processed/vpn/
+s3://YOUR-BUCKET-NAME/processed/vpc-flow/
+```
 
-Run each query block in `athena/queries/02_analytics.sql` individually (Q1 through Q9). Results are saved automatically to `s3://YOUR-BUCKET/athena-results/`.
+### Create external tables
 
-> Each query execution generates a UUID-named CSV file in `athena-results/`. Download and rename these as described in Part 8.
+Run the full contents of `athena/queries/01_create_tables.sql` in the Athena Query Editor.
 
-### Useful CLI checks
+Expected objects:
+
+- database: `security_log_lake`;
+- tables: `firewall_logs`, `vpn_logs`, `vpc_flow_logs`.
+
+### Run Q1–Q9
+
+Run each query block from `athena/queries/02_analytics.sql` separately.
+
+Athena writes result files to:
+
+```text
+s3://YOUR-BUCKET-NAME/athena-results/
+```
+
+Useful check:
+
 ```powershell
-# Verify Athena workgroup output is configured
-aws athena get-work-group --work-group primary
-
-# List result files in S3
 aws s3 ls s3://$BUCKET/athena-results/ --recursive
 ```
 
----
+## 7. Prepare Power BI result files
 
-## 8. Power BI — Download Results
+Download the nine Athena result CSVs to `powerbi/data/`.
 
-After running all 9 queries in Athena, download the result CSVs and rename them.
-
-### Identify which UUID corresponds to which query
-
-```powershell
-cd powerbi/data
-
-# Print the header row of each CSV to identify it
-Get-ChildItem -Filter "*.csv" | ForEach-Object {
-    $header = Get-Content $_.FullName -First 1
-    Write-Host "$($_.Name) -> $header"
-}
-```
-
-Match headers to queries:
+Use the header row to identify which result belongs to which query:
 
 | Header columns | Rename to |
-|---|---|
+| --- | --- |
 | `src_ip, blocked_count` | `q1_top_blocked_ips.csv` |
 | `hour, action, total` | `q2_traffic_by_hour.csv` |
 | `src_ip, total_bytes` | `q3_top_talkers.csv` |
@@ -344,50 +297,76 @@ Match headers to queries:
 | `country_src, denied_count` | `q8_denied_by_country.csv` |
 | `day, total_events, allowed, blocked, dropped, reset_count, total_bytes` | `q9_daily_summary.csv` |
 
-### Rename files
+To print the first row of each local CSV:
+
 ```powershell
-# Run from powerbi/data/ — replace <UUID> with the actual filename
-Rename-Item "<UUID>.csv" "q1_top_blocked_ips.csv"
-Rename-Item "<UUID>.csv" "q2_traffic_by_hour.csv"
-Rename-Item "<UUID>.csv" "q3_top_talkers.csv"
-Rename-Item "<UUID>.csv" "q4_vpn_failed_auth.csv"
-Rename-Item "<UUID>.csv" "q5_vpn_sessions.csv"
-Rename-Item "<UUID>.csv" "q6_vpc_rejected_ports.csv"
-Rename-Item "<UUID>.csv" "q7_severity_by_hour.csv"
-Rename-Item "<UUID>.csv" "q8_denied_by_country.csv"
-Rename-Item "<UUID>.csv" "q9_daily_summary.csv"
+cd powerbi/data
 
-# Remove Athena metadata files
-Remove-Item "*.metadata"
-Remove-Item "*.txt"
-
-# Remove any leftover UUID CSVs (keep only q1-q9)
-Get-ChildItem -Filter "*.csv" | Where-Object { $_.Name -notmatch "^q[1-9]_" } | Remove-Item
+Get-ChildItem -Filter "*.csv" | ForEach-Object {
+    $header = Get-Content $_.FullName -First 1
+    Write-Host "$($_.Name) -> $header"
+}
 ```
 
-### Refresh in Power BI Desktop
-Open the `.pbix` file → Home → Refresh. All 9 tables update from the renamed CSVs.
+Rename the files to the Q1–Q9 names above, then refresh the Power BI model that consumes them.
 
----
+## 8. Re-run the pipeline
 
-## 9. Git Workflow
+The generator uses a relative output path and no fixed random seed. Always run it from the repository root.
 
-### Daily commit flow — Angel (dev-angel)
-```powershell
-git checkout dev-angel
-git add .
-git commit -m "feat: describe what changed"
-git push origin dev-angel
-```
+To regenerate data cleanly:
 
-### Daily commit flow — Flavio (dev-flavio)
-```powershell
-git checkout dev-flavio
-git -c user.email="Flavio.Castro.B@protonmail.com" -c user.name="flaviobox" commit -m "feat: describe what changed"
-git push origin dev-flavio
-```
+1. Remove the generated local CSVs.
 
-### Sync a working branch with main (after a PR is merged)
+   ```powershell
+   Remove-Item ingestion/sample-logs/*.csv
+   ```
+
+2. Generate a new dataset.
+
+   ```powershell
+   python ingestion/generate_logs.py
+   ```
+
+3. Clear source-specific raw and processed objects.
+
+   ```powershell
+   aws s3 rm s3://$BUCKET/raw/firewall/ --recursive
+   aws s3 rm s3://$BUCKET/raw/vpn/ --recursive
+   aws s3 rm s3://$BUCKET/raw/vpc-flow/ --recursive
+   aws s3 rm s3://$BUCKET/processed/firewall/ --recursive
+   aws s3 rm s3://$BUCKET/processed/vpn/ --recursive
+   aws s3 rm s3://$BUCKET/processed/vpc-flow/ --recursive
+   ```
+
+4. Recreate the source prefixes.
+
+   ```powershell
+   aws s3api put-object --bucket $BUCKET --key "raw/firewall/"
+   aws s3api put-object --bucket $BUCKET --key "raw/vpn/"
+   aws s3api put-object --bucket $BUCKET --key "raw/vpc-flow/"
+   aws s3api put-object --bucket $BUCKET --key "processed/firewall/"
+   aws s3api put-object --bucket $BUCKET --key "processed/vpn/"
+   aws s3api put-object --bucket $BUCKET --key "processed/vpc-flow/"
+   ```
+
+5. Upload each source again using the commands from [Generate and upload logs](#3-generate-and-upload-logs).
+
+6. Verify that processed objects are recreated and rerun the Athena queries.
+
+Do not compare regenerated findings to the committed portfolio metrics as though they should match exactly; the generated events are stochastic.
+
+## 9. Collaboration workflow
+
+The project historically used two working branches:
+
+- `dev-angel`;
+- `dev-flavio`.
+
+Both merged into `main` through Pull Requests.
+
+Typical branch refresh:
+
 ```powershell
 git checkout main
 git pull origin main
@@ -396,82 +375,114 @@ git merge main
 git push origin dev-angel   # or dev-flavio
 ```
 
-### Pull Requests
-Both working branches merge to `main` via PR on GitHub UI, not via direct push. This ensures a traceable, auditable contribution history for both contributors.
-
----
+This section documents the project's collaboration history; it is not required to deploy the pipeline.
 
 ## 10. Troubleshooting
 
-### Git identity not being picked up on Windows
+### Lambda does not process an uploaded CSV
 
-`git config --global` may not be honored in some Windows environments. Reliable workarounds:
+**Symptom:** a CSV exists under `raw/<source>/`, but no corresponding object appears under `processed/<source>/`.
+
+**Likely causes:**
+
+- the S3 notification was not applied;
+- the notification still contains the original Lambda ARN;
+- S3 lacks invoke permission for the function;
+- the object key does not match the `raw/` prefix and `.csv` suffix filter;
+- the Lambda execution failed.
+
+**Resolution:**
+
+1. Inspect the notification:
+
+   ```powershell
+   aws s3api get-bucket-notification-configuration --bucket $BUCKET
+   ```
+
+2. Inspect Lambda resource policy:
+
+   ```powershell
+   aws lambda get-policy --function-name security-log-lake-parser
+   ```
+
+3. Tail CloudWatch logs:
+
+   ```powershell
+   aws logs tail /aws/lambda/security-log-lake-parser --follow
+   ```
+
+4. Correct the ARN, permissions, object path, or runtime error and upload a CSV again.
+
+**Verify:** a processed object appears under the matching `processed/<source>/` prefix.
+
+### Athena tables return no data or point to the wrong bucket
+
+**Symptom:** the tables exist, but queries return no rows or reference another environment.
+
+**Likely cause:** the `LOCATION` values in `athena/queries/01_create_tables.sql` still point to the original project bucket.
+
+**Resolution:** replace all three `LOCATION` values with your processed S3 prefixes and recreate the external tables if necessary.
+
+**Verify:** query a table and confirm rows from your bucket are returned.
+
+### S3 prefixes disappear after recursive deletion
+
+**Symptom:** expected source prefixes no longer appear after cleanup.
+
+**Likely cause:** S3 has no real directories; recursive deletion removed the placeholder objects.
+
+**Resolution:** recreate the required prefixes with `put-object`.
+
+**Verify:** list the bucket recursively and confirm the expected prefix objects exist.
+
+### A nested `ingestion/ingestion/sample-logs/` directory appears
+
+**Symptom:** generated CSVs are written under a duplicated `ingestion/ingestion/` path.
+
+**Likely cause:** `generate_logs.py` was run from inside `ingestion/`; its output path is relative to the current working directory.
+
+**Resolution:** return to the repository root, move or remove the misplaced files, and rerun:
 
 ```powershell
-# Option A — set at repo level (no --global)
+python ingestion/generate_logs.py
+```
+
+**Verify:** CSVs appear directly under `ingestion/sample-logs/`.
+
+### Power BI refresh fails after a result schema changes
+
+**Symptom:** Power BI reports a schema/type error after a query result changes columns.
+
+**Likely cause:** an existing Power Query `Changed Type` step references the prior schema.
+
+**Resolution:** inspect the affected query in Power Query Editor and update or remove the stale type step as appropriate.
+
+**Verify:** refresh completes using the current Q1–Q9 CSV schema.
+
+### Git uses the wrong identity on Windows
+
+**Symptom:** commits use an unintended author identity.
+
+**Likely cause:** the expected global Git identity is not active in the current environment.
+
+**Resolution:** set repository-level identity or pass it explicitly at commit time.
+
+```powershell
 git config user.email "your@email.com"
 git config user.name "your-username"
-
-# Option B — pass identity directly at commit time
-git -c user.email="your@email.com" -c user.name="your-username" commit -m "message"
 ```
 
-### S3 folder placeholders disappear after deletion
+**Verify:** run `git config user.email` and `git config user.name` before committing.
 
-S3 has no real directories. Running `aws s3 rm s3://BUCKET/raw/ --recursive` removes the folder placeholders along with the files. Always delete **subfolder by subfolder** and then recreate the placeholders:
-
-```powershell
-# Correct approach — delete contents only
-aws s3 rm s3://$BUCKET/raw/firewall/ --recursive
-# Then recreate the placeholder
-aws s3api put-object --bucket $BUCKET --key "raw/firewall/"
-```
-
-### Nested ingestion folder created by mistake
-
-Happens when `generate_logs.py` is run from inside the `ingestion/` directory. The script uses `OUTPUT_DIR = "ingestion/sample-logs"` as a relative path, creating `ingestion/ingestion/sample-logs/`.
-
-**Fix:** Always run from the repo root:
-```powershell
-# Correct
-python ingestion/generate_logs.py
-
-# Move any misplaced files and remove the duplicate folder
-Move-Item ingestion/ingestion/sample-logs/*.csv ingestion/sample-logs/
-Remove-Item ingestion/ingestion -Recurse
-```
-
-### Power BI schema refresh error after adding columns
-
-If a query result has new or different columns, Power BI throws a refresh error due to a hardcoded "Changed Type" step in Power Query. Fix: open Power Query Editor → find the "Changed Type" step → delete it → close and apply.
-
-### Lambda not processing uploaded files
-
-1. Verify the S3 event notification is correctly applied:
-```powershell
-aws s3api get-bucket-notification-configuration --bucket $BUCKET
-```
-2. Verify Lambda has permission to be invoked by S3:
-```powershell
-aws lambda get-policy --function-name security-log-lake-parser
-```
-3. Check CloudWatch logs for execution errors:
-```powershell
-aws logs tail /aws/lambda/security-log-lake-parser --follow
-```
-
----
-
-## Quick Reference
+## 11. Quick reference
 
 | Resource | Value |
-|---|---|
-| AWS Region | `us-east-1` |
-| S3 Bucket | `YOUR-BUCKET-NAME` |
+| --- | --- |
+| AWS Region used by the project | `us-east-1` |
+| S3 bucket | `YOUR-BUCKET-NAME` |
 | Lambda function | `security-log-lake-parser` |
 | Lambda IAM role | `security-log-lake-lambda-role` |
 | Athena database | `security_log_lake` |
 | Athena workgroup | `primary` |
-| GitHub repo | `https://github.com/angel-wm/security-log-lake-aws` |
-| Working branches | `dev-angel`, `dev-flavio` |
-| IAM users | `angel-admin`, `flavio-admin` |
+| Repository | `https://github.com/angel-wm/security-log-lake-aws` |
+| Historical working branches | `dev-angel`, `dev-flavio` |

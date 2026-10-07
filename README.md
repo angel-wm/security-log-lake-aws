@@ -1,285 +1,263 @@
 English | [Español](README.es.md)
 
-# 🔐 Security Log Lake & Traffic Insights on AWS
+# Security Log Lake & Traffic Insights on AWS
 
-> **Serverless analytics platform for security and network telemetry** — ingests raw firewall, VPN, and VPC Flow logs, normalizes them through an automated pipeline, and generates actionable insights via SQL analytics and interactive Power BI dashboards.
+Security Log Lake is a serverless security-analytics pipeline for synthetic firewall, VPN, and VPC Flow telemetry. It generates raw logs, normalizes them with an event-driven AWS Lambda function, queries the processed data with Amazon Athena, and presents the resulting analysis in Power BI.
 
-<br>
+The repository is a portfolio project built by two engineers to demonstrate cloud data engineering, security analytics, SQL, Python, Power BI, and a pull-request-based collaboration workflow.
 
-## 📊 Dashboards
+## Start here
 
-### Executive Overview
-![Executive Overview](docs/screenshots/dashboard-executive.png)
-*150K total events across 30 days · 69K blocked · 46.2% block rate · interactive date slicer*
+This project is most useful if you want to inspect or reproduce:
 
-### Network & Threat Analysis
-![Network & Threat Analysis](docs/screenshots/dashboard-network.png)
-*Severity heatmap by hour · Top 10 source IPs by bytes · Rejected ports breakdown*
+- an event-driven S3 → Lambda → S3 processing path;
+- schema-aware normalization across three security-log sources;
+- serverless SQL analytics in Athena;
+- a Power BI reporting layer built from Athena result CSVs;
+- documented deployment, schemas, findings, and engineering tradeoffs.
 
-### VPN Analysis
-![VPN Analysis](docs/screenshots/dashboard-vpn.png)
-*6 active users · 30K failed auth attempts · gateway traffic imbalance · deviation from average*
+### Requirements and important limitations
 
-<br>
+To reproduce the project, you need:
 
-## 📌 Project Overview
+- an AWS account with access to S3, Lambda, Athena, IAM, and CloudWatch;
+- Python 3.10+ for local log generation;
+- AWS CLI v2 configured with your credentials;
+- Power BI Desktop on Windows for the dashboard workflow.
 
-This project simulates a production-grade **Security Operations Center (SOC) data pipeline** built entirely on AWS serverless services. It covers the full lifecycle of security telemetry: from raw log generation, through automated normalization, to SQL-driven analysis and executive-ready Power BI dashboards.
+Before reusing the AWS configuration, replace deployment-specific values in:
 
-Designed as a **real-world portfolio project**, it demonstrates cloud engineering, data engineering, and security analytics skills in a collaborative, version-controlled environment.
+- `lambda/parser/s3-notification.json` — contains the original Lambda function ARN;
+- `athena/queries/01_create_tables.sql` — contains the original project bucket in the table `LOCATION` clauses.
 
-<br>
+The deployment guide currently uses the managed `AmazonS3FullAccess` policy for a straightforward reproduction path. Treat that as a lab/portfolio setup rather than a least-privilege production IAM baseline.
 
-## 🏗️ Architecture
+The synthetic generator does not set a fixed random seed. Regenerating the 30-day dataset will produce different event counts and findings from the committed portfolio run.
 
+For the complete deployment path and substitutions, use the [Setup Guide](docs/setup.md).
+
+## Quick Start
+
+1. Clone the repository.
+
+   ```bash
+   git clone https://github.com/angel-wm/security-log-lake-aws.git
+   cd security-log-lake-aws
+   ```
+
+2. Generate the local synthetic dataset.
+
+   ```bash
+   python ingestion/generate_logs.py
+   ```
+
+   The generator writes 90 CSV files: 30 days × 3 sources × 5,000 records per source/day, or 450,000 records total.
+
+3. Follow the [Setup Guide](docs/setup.md) to create the S3 prefixes, deploy the Lambda parser, configure the S3 trigger, and substitute your AWS identifiers.
+
+4. Run `athena/queries/01_create_tables.sql`, then execute Q1–Q9 from `athena/queries/02_analytics.sql`.
+
+5. Use the resulting CSVs in `powerbi/data/` to refresh the Power BI reporting layer.
+
+If Lambda is not processing uploaded files or another deployment step fails, use the [troubleshooting section](docs/setup.md#10-troubleshooting).
+
+## Architecture
+
+The pipeline has one main flow:
+
+```text
+Synthetic log generator
+        |
+        v
+S3 raw/<source>/
+        |
+        | s3:ObjectCreated:*
+        v
+AWS Lambda: security-log-lake-parser
+        |
+        | validate + normalize + enrich
+        v
+S3 processed/<source>/
+        |
+        v
+Amazon Athena external tables
+        |
+        | Q1-Q9 result CSVs
+        v
+Power BI dashboards
 ```
-Synthetic Logs
-      │
-      ▼
- S3 (raw/)           ← Partitioned by source: firewall/, vpn/, vpc-flow/
-      │
-      │  S3 Event Notification (ObjectCreated)
-      ▼
- AWS Lambda           ← Python 3.12 | Normalizes timestamps, IPs, ports, actions
- (security-log-lake-parser)
-      │
-      ▼
- S3 (processed/)      ← Clean, enriched CSVs ready for querying
-      │
-      ▼
- Amazon Athena         ← Serverless SQL on S3 | 9 analytical queries
-      │
-      ▼
- Power BI Dashboards   ← Executive Overview · Network & Threat · VPN Analysis
-```
 
-<br>
+The essential behavior is also readable directly from the source:
 
-## ☁️ AWS Services Used
+| Component | Source of truth | Responsibility |
+| --- | --- | --- |
+| Synthetic data | [`ingestion/generate_logs.py`](ingestion/generate_logs.py) | Generates firewall, VPN, and VPC Flow CSVs |
+| Normalization | [`lambda/parser/handler.py`](lambda/parser/handler.py) | Detects source, validates fields, normalizes values, adds metadata, writes processed CSVs |
+| Event trigger | [`lambda/parser/s3-notification.json`](lambda/parser/s3-notification.json) | Invokes Lambda for CSV objects created under `raw/` |
+| Athena schema | [`athena/queries/01_create_tables.sql`](athena/queries/01_create_tables.sql) | Defines the three external tables |
+| Analytics | [`athena/queries/02_analytics.sql`](athena/queries/02_analytics.sql) | Implements nine analytical queries |
+| Reporting data | [`powerbi/data/`](powerbi/data/) | Stores the committed Athena result CSVs used by Power BI |
 
-| Service | Role |
-|---|---|
-| **Amazon S3** | Raw and processed log storage, partitioned by source and date |
-| **AWS Lambda** | Event-driven log parser — normalizes, validates, and enriches logs |
-| **Amazon Athena** | Serverless SQL analytics directly on S3 (no database server required) |
-| **AWS IAM** | Least-privilege roles and policies for Lambda and Athena |
-| **Amazon CloudWatch** | Lambda execution monitoring, error logging, and alerting |
-| **S3 Event Notifications** | Event-driven trigger: new raw file → automatic Lambda invocation |
+## Data pipeline
 
-<br>
+### Synthetic log generation
 
-## 📦 Data Pipeline — What It Does
+`ingestion/generate_logs.py` creates three sources across 30 days at 5,000 records per source/day.
 
-### 1. Log Generation (`ingestion/generate_logs.py`)
-Generates **3 types of synthetic security logs** across **30 days** at **5,000 records/day per source** — 450,000 total records:
+| Source | Raw fields | Examples of modeled behavior |
+| --- | ---: | --- |
+| Firewall | 15 | actions, IPs, ports, protocol, bytes, severity, policy, countries |
+| VPN | 11 | auth events, users, gateways, session duration, transfer volume, failure reason |
+| VPC Flow | 12 | interfaces, IPs, ports, protocol numbers, packets, bytes, flow action |
 
-| Log Type | Fields | Description |
-|---|---|---|
-| **Firewall** | 15 fields | Action, IPs, ports, protocol, bytes, severity, country |
-| **VPN** | 11 fields | Auth events, user, gateway, session duration, status |
-| **VPC Flow** | 12 fields | AWS-style network flow records with packet and byte counts |
+The generator weights a fixed set of source IPs toward blocked traffic to create repeatable threat patterns at the scenario level, while individual generated rows remain stochastic.
 
-Includes **realistic threat simulation**: a set of known malicious IPs appear with weighted DENY rates to simulate real attack traffic patterns.
+### Lambda normalization
 
-### 2. Lambda Parser (`lambda/parser/handler.py`)
-An event-driven Python 3.12 function triggered automatically on every S3 upload. It:
-- **Detects** the log type from the S3 key prefix
-- **Validates** every field against a per-source schema, logging data quality issues without dropping records
-- **Normalizes** timestamps to ISO 8601 format across multiple input formats
-- **Standardizes** action and status vocabularies (`ACCEPT` → `ALLOW`, `AUTH_FAIL` → `FAIL`, `REJECT` → `DENY`)
-- **Enriches** each record with `_source`, `_processed_at`, and `_has_issues` metadata
-- **Writes** clean CSVs to `processed/` for Athena consumption
+The Python 3.12 Lambda function:
 
-### 3. Athena Analytics (`athena/queries/`)
-External tables defined directly over S3 — no ETL, no infrastructure to provision. Nine analytical queries covering:
+- detects `firewall`, `vpn`, or `vpc-flow` from the S3 key prefix;
+- checks each row for required fields and logs detected issues;
+- normalizes timestamps to ISO 8601;
+- maps heterogeneous action/status values into a smaller vocabulary;
+- adds `_source`, `_processed_at`, and `_has_issues`;
+- writes the processed CSV to the matching `processed/<source>/` prefix.
+
+The current Athena DDL declares `_has_issues` as `BOOLEAN`; the CSV contains the serialized values `True` and `False`.
+
+### Athena analytics
+
+The repository contains nine analytical queries:
 
 | Query | Insight |
-|---|---|
-| **Q1** | Top 10 IPs with most blocked traffic |
-| **Q2** | Allowed vs. blocked traffic per hour |
-| **Q3** | Top talkers by total bytes transferred |
-| **Q4** | VPN failed authentication attempts by user |
-| **Q5** | VPN session duration and bytes by user/gateway |
-| **Q6** | VPC rejected traffic by destination port |
-| **Q7** | Firewall severity distribution by hour |
-| **Q8** | Countries with most denied traffic |
-| **Q9** | Daily executive summary — events, blocks, resets, bytes |
+| --- | --- |
+| Q1 | Top blocked source IPs |
+| Q2 | Allowed vs. blocked traffic by hour |
+| Q3 | Top talkers by total bytes |
+| Q4 | Failed VPN authentication by user |
+| Q5 | VPN session duration and bytes by user/gateway |
+| Q6 | Rejected VPC traffic by destination port |
+| Q7 | Firewall severity distribution by hour |
+| Q8 | Countries with the most denied traffic |
+| Q9 | Daily executive summary |
 
-### 4. Power BI Dashboards
-Three dashboard pages connected to the nine Athena result CSVs:
+Because the Lambda layer maps firewall `DROP` to `DENY`, the Q9 `dropped` column is `0` for the current processed dataset.
 
-| Page | Key Visuals |
-|---|---|
-| **Executive Overview** | KPI cards, hourly traffic trends, top blocked IPs, denied-by-country |
-| **Network & Threat Analysis** | Severity-by-hour line chart, top talkers by bytes, rejected ports |
-| **VPN Analysis** | Failed auth deviation from average, gateway imbalance, session data |
+## Dashboard evidence
 
-<br>
+The screenshots below are portfolio evidence from the committed reporting run. The underlying result CSVs are versioned under `powerbi/data/`.
 
-## 📁 Repository Structure
+### Executive Overview
 
-```
+![Executive Overview](docs/screenshots/dashboard-executive.png)
+
+The executive page summarizes 150,000 firewall events across 30 days, blocked traffic, hourly patterns, top blocked IPs, and denied traffic by country.
+
+### Network & Threat Analysis
+
+![Network & Threat Analysis](docs/screenshots/dashboard-network.png)
+
+The network page combines severity-by-hour analysis, high-volume source IPs, and rejected VPC destination ports.
+
+### VPN Analysis
+
+![VPN Analysis](docs/screenshots/dashboard-vpn.png)
+
+The VPN page compares failed authentication by user, session activity, gateway traffic, and deviation from the fleet average.
+
+## Published findings
+
+These values come from the committed Athena result CSVs in `powerbi/data/`. A newly generated dataset will differ because the generator is stochastic.
+
+| Metric | Published result |
+| --- | ---: |
+| Firewall events | 150,000 |
+| Blocked firewall events | 69,295 |
+| Overall block rate | 46.2% |
+| Top blocked source IP | `91.108.4.12` — 9,586 |
+| Highest denied-source country | MX — 7,028 |
+| Most rejected VPC destination port | 6379 — 7,648 |
+| Failed VPN authentication events | 29,878 |
+| Highest failed-auth user | `agarcia` — 5,097 |
+| Highest-bandwidth source IP | `91.108.4.12` — 9,606,409,766 bytes |
+
+## Documentation map
+
+Choose the document based on what you need to do:
+
+| Goal | Read |
+| --- | --- |
+| Deploy or reproduce the project | [Setup Guide](docs/setup.md) |
+| Look up raw, processed, Athena, query-output, or DAX fields | [Data Dictionary](docs/data-dictionary.md) |
+| Inspect synthetic-data behavior | [Log generator](ingestion/generate_logs.py) |
+| Inspect validation and normalization logic | [Lambda parser](lambda/parser/handler.py) |
+| Inspect table definitions | [Athena DDL](athena/queries/01_create_tables.sql) |
+| Inspect analytical logic | [Athena analytics queries](athena/queries/02_analytics.sql) |
+| Review dashboard evidence | [Dashboard screenshots](docs/screenshots/) |
+
+## Repository structure
+
+```text
 security-log-lake-aws/
-│
 ├── ingestion/
-│   ├── generate_logs.py          # Synthetic log generator (firewall, VPN, VPC Flow)
-│   └── sample-logs/              # Generated CSV files (gitignored)
-│
+│   └── generate_logs.py
 ├── lambda/
 │   └── parser/
-│       ├── handler.py            # Lambda function — core normalization logic
-│       ├── requirements.txt      # Dependencies (boto3 pre-installed on Lambda)
-│       ├── trust-policy.json     # IAM trust policy for Lambda execution role
-│       └── s3-notification.json  # S3 event trigger configuration
-│
+│       ├── handler.py
+│       ├── requirements.txt
+│       ├── trust-policy.json
+│       └── s3-notification.json
 ├── athena/
 │   └── queries/
-│       ├── 01_create_tables.sql  # External table DDL for all 3 log types
-│       └── 02_analytics.sql      # 9 analytical queries (Q1–Q9)
-│
+│       ├── 01_create_tables.sql
+│       └── 02_analytics.sql
 ├── powerbi/
-│   └── data/                     # Athena result CSVs for Power BI (q1–q9)
-│
+│   └── data/
 ├── docs/
-│   └── screenshots/              # Dashboard screenshots
-│
-├── .gitignore
-├── LICENSE
-└── README.md
+│   ├── setup.md
+│   ├── data-dictionary.md
+│   └── screenshots/
+├── README.md
+└── README.es.md
 ```
 
-<br>
+## Engineering decisions and tradeoffs
 
-## 🔧 Technical Highlights
+- **Athena external tables instead of a database server:** processed CSVs remain in S3 and are queried in place.
+- **Explicit table DDL instead of Glue Crawlers:** the schema is visible and version controlled.
+- **CSV instead of Parquet:** the current portfolio workflow favors transparent files and direct Power BI use; Parquet remains a roadmap optimization.
+- **Normalization in Lambda:** action/status vocabulary is standardized once before analytics instead of repeatedly inside every query.
+- **Issue metadata in every processed row:** `_has_issues` preserves row-level visibility into missing required fields.
+- **Deployment configuration is not fully portable as checked in:** the original S3 bucket and Lambda ARN must be replaced before reproducing the environment.
+- **IAM in the setup guide prioritizes reproducibility:** the documented S3 full-access policy should be narrowed for production use.
 
-- **Event-Driven Architecture** — Lambda triggers on `s3:ObjectCreated:*`, zero polling required
-- **Schema Validation at Ingest** — every field validated per source; issues flagged and logged, never silently dropped
-- **Unified Normalization Layer** — heterogeneous vocabularies across log types resolved at write time, keeping Athena queries clean
-- **Serverless SQL** — Athena queries S3 directly via external tables; no database provisioning, pay-per-query pricing
-- **Idempotent Pipeline** — re-uploading a raw file safely overwrites the processed output
-- **Data Quality Metadata** — every processed record carries `_has_issues` and `_processed_at` for full auditability
-- **Least-Privilege IAM** — Lambda execution role scoped to specific resources only
+## Team and workflow
 
-<br>
+Built end-to-end by two engineers. Both contributors participated across the project; the domain lead indicates deeper prior experience rather than exclusive ownership.
 
-## 📈 Key Findings from 30 Days of Data
+| Contributor | Domain lead |
+| --- | --- |
+| [flaviobox](https://github.com/flaviobox) | Python, SQL, and analytics |
+| [angel-wm](https://github.com/angel-wm) | Cloud infrastructure and security |
 
-| Metric | Value |
-|---|---|
-| Total firewall events | 150,000 |
-| Overall block rate | 46.2% |
-| Top blocked IP | `91.108.4.12` — 9,586 connections blocked |
-| Highest-volume denied country | MX — 7,028 events |
-| Most attacked port | 6379 (Redis) — 7,648 VPC rejections |
-| VPN brute-force leader | `agarcia` — 5,097 failed auth attempts (+2.36% above average) |
-| Total VPN failed auth | 30K across all users |
-| Highest bandwidth consumer | `91.108.4.12` — 9.6 billion bytes |
+The project used `dev-angel` and `dev-flavio` working branches with pull requests into `main` for traceable collaboration.
 
-<br>
+## Roadmap
 
-## 🚀 Getting Started
+Completed:
 
-### Prerequisites
-- AWS account with access to S3, Lambda, Athena, IAM, CloudWatch
-- Python 3.10+
-- AWS CLI configured (`aws configure`)
-- Power BI Desktop
+- synthetic firewall, VPN, and VPC Flow generation;
+- S3 raw/processed architecture;
+- Lambda normalization and event trigger;
+- Athena external tables and Q1–Q9 analytics;
+- three Power BI dashboard pages;
+- deployment and data-dictionary documentation.
 
-### 1. Clone the repository
-```bash
-git clone https://github.com/angel-wm/security-log-lake-aws.git
-cd security-log-lake-aws
-```
+Future optimizations:
 
-### 2. Generate synthetic logs
-```bash
-python ingestion/generate_logs.py
-# Produces 90 CSV files (30 days × 3 sources) in ingestion/sample-logs/
-```
+- partition Athena tables by date;
+- emit Parquet through Lambda or Glue for larger-scale workloads.
 
-### 3. Upload raw logs to S3
-```bash
-aws s3 sync ingestion/sample-logs/ s3://YOUR-BUCKET/raw/ --include "*.csv"
-```
-
-### 4. Deploy the Lambda parser
-```bash
-cd lambda/parser
-zip function.zip handler.py
-aws lambda update-function-code \
-  --function-name security-log-lake-parser \
-  --zip-file fileb://function.zip
-```
-
-### 5. Configure S3 event trigger
-```bash
-aws s3api put-bucket-notification-configuration \
-  --bucket YOUR-BUCKET \
-  --notification-configuration file://lambda/parser/s3-notification.json
-```
-
-### 6. Run Athena analytics
-Execute `athena/queries/01_create_tables.sql` then `02_analytics.sql` in the Athena console.
-
-### 7. Open Power BI
-Connect Power BI Desktop to the CSV files in `powerbi/data/`.
-
-> Full deployment guide available in `docs/setup.md`
-
-<br>
-
-## 👥 Team
-
-Built end-to-end by two engineers in a collaborative, PR-based workflow — both contributors accumulated visible commits across all phases.
-
-| | [flaviobox](https://github.com/flaviobox) | [angel-wm](https://github.com/angel-wm) |
-|---|---|---|
-| Cloud Infrastructure & IAM | ✅ | ✅ |
-| S3 Architecture & Data Modeling | ✅ | ✅ |
-| Python Lambda Parser | ✅ | ✅ |
-| Athena SQL Analytics | ✅ | ✅ |
-| Power BI Dashboards | ✅ | ✅ |
-| **Domain Lead** | Python, SQL & Analytics | Cloud Infrastructure & Security |
-
-> Both contributors participated in all phases. "Domain Lead" reflects where each brought deeper prior expertise — not exclusive ownership of any deliverable.
-
-**Branching strategy**: `main` ← PR from `dev-angel` / `dev-flavio` — all merges go through pull requests for traceable, auditable contribution history.
-
-<br>
-
-## 🧠 Key Engineering Decisions
-
-- **External Athena tables over Glue Crawlers** — faster iteration, explicit schema control, zero crawler scheduling complexity
-- **CSV over Parquet for processed files** — direct Power BI connectivity without additional transformation; Parquet is the natural next optimization at scale
-- **Normalization at Lambda, not in Athena VIEWs** — clean schemas at write time reduce repeated transformation cost and eliminate per-query bugs
-- **`_has_issues` as STRING, not BOOLEAN** — Athena's CSV reader does not reliably parse boolean values from text files; STRING avoids silent NULLs
-- **VPN status normalized to uppercase at ingest** — Athena string matching is case-sensitive; normalizing at Lambda prevents query-time mismatches
-
-<br>
-
-## 🛣️ Roadmap
-
-- [x] Synthetic log generator (firewall, VPN, VPC Flow)
-- [x] S3 bucket with `raw/`, `processed/`, `curated/`, `athena-results/` structure
-- [x] Lambda parser with schema validation and normalization
-- [x] S3 event-driven trigger
-- [x] Athena external tables and 9 analytics queries
-- [x] Power BI — Executive Overview dashboard
-- [x] Power BI — Network & Threat Analysis dashboard
-- [x] Power BI — VPN Analysis dashboard
-- [x] `docs/setup.md` — full deployment walkthrough
-- [x] `docs/data-dictionary.md` — field definitions and value enumerations
-- [ ] Partitioned Athena tables by date for query cost optimization
-- [ ] Parquet output via Lambda or Glue for production-scale performance
-
-<br>
-
-## 📄 License
+## License
 
 [MIT](LICENSE) — free to use, learn from, and build upon.
-
-<br>
-
----
-
-> *Built to demonstrate real-world cloud data engineering and security analytics skills — not just theory, but a working pipeline from raw bytes to business insight.*
