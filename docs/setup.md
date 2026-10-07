@@ -150,9 +150,10 @@ Expected result:
 - 5,000 records per source/day;
 - 450,000 total generated records.
 
-The new dataset will not reproduce the published metrics exactly. If you want to restore the committed source dataset later, run:
+The new dataset will not reproduce the published metrics exactly. If you want to restore the committed source dataset later, first remove the generated CSVs and then restore the tracked files:
 
 ```powershell
+Remove-Item ingestion/sample-logs/*.csv
 git restore ingestion/sample-logs
 ```
 
