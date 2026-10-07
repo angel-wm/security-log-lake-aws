@@ -32,7 +32,10 @@ Before reusing the AWS configuration, replace deployment-specific values in:
 
 The deployment guide currently uses the managed `AmazonS3FullAccess` policy for a straightforward reproduction path. Treat that as a lab/portfolio setup rather than a least-privilege production IAM baseline.
 
-The synthetic generator does not set a fixed random seed. Regenerating the 30-day dataset will produce different event counts and findings from the committed portfolio run.
+The repository supports two distinct reproducibility paths:
+
+- **Replay the published run:** use the 90 version-controlled CSVs already in `ingestion/sample-logs/`. This preserves the source dataset behind the committed portfolio evidence and is the right path when comparing your Athena results with the published findings below.
+- **Generate a fresh synthetic run:** clear the committed CSVs locally, then run `python ingestion/generate_logs.py`. The generator uses the execution date and does not set a fixed random seed, so the new files, event counts, and findings will differ from the published run.
 
 For the complete deployment path and substitutions, use the [Setup Guide](docs/setup.md).
 
@@ -45,15 +48,19 @@ For the complete deployment path and substitutions, use the [Setup Guide](docs/s
    cd security-log-lake-aws
    ```
 
-2. Generate the local synthetic dataset.
+2. Choose the source dataset for this run.
 
-   ```bash
-   python ingestion/generate_logs.py
-   ```
+   - To reproduce the published run, keep the 90 committed CSVs in `ingestion/sample-logs/` and do not run the generator.
+   - To create a fresh stochastic run, first remove the committed CSVs from your local working tree, then generate a new 30-day dataset:
 
-   The generator writes 90 CSV files: 30 days × 3 sources × 5,000 records per source/day, or 450,000 records total.
+     ```powershell
+     Remove-Item ingestion/sample-logs/*.csv
+     python ingestion/generate_logs.py
+     ```
 
-3. Follow the [Setup Guide](docs/setup.md) to create the S3 prefixes, deploy the Lambda parser, configure the S3 trigger, and substitute your AWS identifiers.
+     The fresh run writes 90 CSV files: 30 days × 3 sources × 5,000 records per source/day, or 450,000 records total. Because dates and random values are generated at runtime, its findings will not match the published metrics exactly.
+
+3. Follow the [Setup Guide](docs/setup.md) to create the S3 prefixes, upload the selected source dataset, deploy the Lambda parser, configure the S3 trigger, and substitute your AWS identifiers.
 
 4. Run `athena/queries/01_create_tables.sql`, then execute Q1–Q9 from `athena/queries/02_analytics.sql`.
 
