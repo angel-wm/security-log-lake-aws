@@ -1,6 +1,8 @@
-# 📖 Data Dictionary — Security Log Lake
+# Data Dictionary — Security Log Lake
 
-Complete reference for all fields, tables, and calculated measures used across the pipeline: raw logs → Lambda normalization → Athena tables → Power BI.
+Reference for the schemas, normalized values, Athena outputs, and Power BI measures used across the pipeline: raw logs → Lambda normalization → Athena tables → Power BI.
+
+Use this document for field-level lookup. For deployment steps, see [Setup Guide](setup.md). For the project overview and architecture, return to the [README](../README.md).
 
 ---
 
@@ -84,7 +86,7 @@ After normalization by `lambda/parser/handler.py`, files are stored in `s3://YOU
 |---|---|---|---|
 | `_source` | STRING | Log source type, detected from S3 key prefix | `firewall`, `vpn`, `vpc-flow` |
 | `_processed_at` | STRING | UTC timestamp when Lambda processed the record | `2026-03-15T14:32:07` |
-| `_has_issues` | STRING | Whether the record had missing or empty required fields | `True`, `False` |
+| `_has_issues` | BOOLEAN | Whether the record had missing or empty required fields | `True`, `False` |
 
 ### 2.2 Normalized Fields
 
@@ -128,7 +130,7 @@ Location: `s3://YOUR-BUCKET/processed/firewall/`
 | `country_dst` | STRING | |
 | `_source` | STRING | Always `firewall` |
 | `_processed_at` | STRING | |
-| `_has_issues` | STRING | Stored as STRING, not BOOLEAN — Athena CSV limitation |
+| `_has_issues` | BOOLEAN | Athena DDL type; CSV values are serialized as `True` / `False` |
 
 ### 3.2 `security_log_lake.vpn_logs`
 
@@ -149,7 +151,7 @@ Location: `s3://YOUR-BUCKET/processed/vpn/`
 | `failure_reason` | STRING | Empty string on success |
 | `_source` | STRING | Always `vpn` |
 | `_processed_at` | STRING | |
-| `_has_issues` | STRING | |
+| `_has_issues` | BOOLEAN | Athena DDL type; CSV values are serialized as `True` / `False` |
 
 ### 3.3 `security_log_lake.vpc_flow_logs`
 
@@ -276,8 +278,5 @@ Quick reference for all controlled vocabularies after Lambda normalization.
 | `policy_name` | firewall | `internet-access`, `internal-only`, `dmz-policy`, `vpn-split` |
 | `vpn_gateway` | vpn | `vpn-gw-01`, `vpn-gw-02` |
 | `log_status` | vpc-flow | `OK` |
-| `_has_issues` | all | `True`, `False` (stored as STRING) |
+| `_has_issues` | all | `True`, `False` (Athena type: `BOOLEAN`) |
 
----
-
-*Last updated: March 2026*
